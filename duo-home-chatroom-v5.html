@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>秘密基地 · Duo's Home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#5A4A52; --ink-soft:#A091A0;
+    --rose:#C9858F; --rose-deep:#B16A78;
+    --xy-bub:#F8E8E4; --ke-bub:#E7EEF2;
+    --xy-name:#E89A4D; --ke-name:#5E9BC4; --duo-name:#DD7EA8;
+    --line:rgba(176,140,158,.20);
+    --card:rgba(255,255,255,.62); --card-solid:#FBF4F7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    color:var(--ink);background:linear-gradient(155deg,#F3DCE4,#EFE2EE 48%,#E6D7EA);
+    -webkit-font-smoothing:antialiased;display:flex;justify-content:center;min-height:100vh}
+  .serif{font-family:"Fraunces",Georgia,serif}
+  .room{width:100%;max-width:462px;height:100vh;max-height:940px;display:flex;flex-direction:column;
+    overflow:hidden;background:linear-gradient(160deg,#F8EAEF,#F3E9F1 46%,#ECE0EE);box-shadow:0 20px 60px rgba(120,90,110,.18)}
+  @media(min-width:520px){.room{border-radius:30px;height:94vh}}
+
+  .head{padding:18px 22px 14px;display:flex;align-items:center;gap:11px;border-bottom:1px solid var(--line)}
+  .lantern{font-size:22px;line-height:1;filter:drop-shadow(0 0 10px rgba(201,133,143,.55))}
+  .title .brand{font-family:"Fraunces",Georgia,serif;font-size:18px;color:var(--rose-deep);letter-spacing:.5px;font-weight:500}
+  .title .sub{font-size:10.5px;color:var(--ink-soft);letter-spacing:.12em;margin-top:1px}
+  .lamps{display:flex;gap:5px;margin-left:4px}
+  .lamp{width:10px;height:10px;border-radius:50%;animation:breathe 3.5s ease-in-out infinite}
+  .lamp.xy{background:var(--xy-name);box-shadow:0 0 9px rgba(232,154,77,.75)}
+  .lamp.ke{background:var(--ke-name);box-shadow:0 0 9px rgba(94,155,196,.75);animation-delay:.6s}
+  .lamp.duo{background:var(--duo-name);box-shadow:0 0 9px rgba(221,126,168,.75);animation-delay:1.2s}
+  @keyframes breathe{0%,100%{opacity:.55;transform:scale(.92)}50%{opacity:1;transform:scale(1)}}
+  @media(prefers-reduced-motion:reduce){.lamp{animation:none}}
+  .now{margin-left:auto;font-size:12px;color:var(--ink-soft);text-align:right;line-height:1.35}
+  .now b{color:var(--rose);font-weight:500;font-variant-numeric:tabular-nums}
+
+  .stream{flex:1;overflow-y:auto;padding:16px 18px 12px;display:flex;flex-direction:column;gap:14px}
+  .msg{display:flex;gap:9px;max-width:84%;animation:rise .42s cubic-bezier(.2,.7,.3,1) both}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @media(prefers-reduced-motion:reduce){.msg{animation:none}}
+  .ava{width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
+    justify-content:center;font-size:11.5px;color:#fff;margin-top:2px;font-weight:500}
+  .ava.xy{background:var(--xy-name)} .ava.ke{background:var(--ke-name)} .ava.duo{background:var(--duo-name)}
+  .wrap{display:flex;flex-direction:column;min-width:0}
+  .nm{font-size:11.5px;margin-bottom:3px;font-weight:700}
+  .msg.xy .nm{color:var(--xy-name)} .msg.ke .nm{color:var(--ke-name)} .msg.duo .nm{color:var(--duo-name)}
+  .bubble{padding:10px 14px;border-radius:16px;font-size:14.5px;line-height:1.62;white-space:pre-wrap;word-break:break-word}
+  .ts{font-size:10px;color:var(--ink-soft);margin-top:4px;opacity:.85;font-variant-numeric:tabular-nums}
+  .msg.xy  .bubble{background:var(--xy-bub);border:1.5px solid var(--xy-name);border-top-left-radius:5px}
+  .msg.ke  .bubble{background:var(--ke-bub);border:1.5px solid var(--ke-name);border-top-left-radius:5px}
+  .msg.duo{align-self:flex-end;flex-direction:row-reverse}
+  .msg.duo .wrap{align-items:flex-end}
+  .msg.duo .bubble{background:rgba(255,255,255,.85);border:1.5px solid var(--duo-name);border-top-right-radius:5px}
+
+  .compose{padding:8px 16px 14px;border-top:1px solid var(--line);background:rgba(255,255,255,.30)}
+  .who-pick{display:flex;gap:7px;margin-bottom:9px;align-items:center}
+  .who-pick button{font:inherit;font-size:12px;cursor:pointer;background:transparent;color:var(--ink-soft);
+    border:1px solid var(--line);border-radius:20px;padding:4px 13px;display:flex;align-items:center;gap:6px;transition:.18s}
+  .who-pick .mini{width:8px;height:8px;border-radius:50%}
+  .who-pick .mini.xy{background:var(--xy-name)} .who-pick .mini.ke{background:var(--ke-name)} .who-pick .mini.duo{background:var(--duo-name)}
+  .who-pick button[data-w="小愿"].on{color:var(--xy-name);border-color:var(--xy-name);background:var(--card-solid)}
+  .who-pick button[data-w="克老师"].on{color:var(--ke-name);border-color:var(--ke-name);background:var(--card-solid)}
+  .who-pick button[data-w="朵朵"].on{color:var(--duo-name);border-color:var(--duo-name);background:var(--card-solid)}
+  .link{margin-left:auto;font-size:11px;display:flex;align-items:center;gap:5px;color:var(--ink-soft)}
+  .link .led{width:7px;height:7px;border-radius:50%;background:#C9A0A8}
+  .link.on .led{background:#9CC4A0;box-shadow:0 0 7px #9CC4A0}
+  .cbox{display:flex;align-items:flex-end;gap:9px;background:var(--card-solid);border:1px solid var(--line);
+    border-radius:20px;padding:8px 8px 8px 16px}
+  .cbox textarea{flex:1;border:none;background:transparent;resize:none;outline:none;font:inherit;
+    font-size:14.5px;color:var(--ink);line-height:1.5;max-height:100px;padding:5px 0}
+  .cbox textarea::placeholder{color:#C7AEB8}
+  .send{width:38px;height:38px;border-radius:12px;border:none;cursor:pointer;background:var(--rose);
+    color:#fff;font-size:15px;flex-shrink:0;transition:.15s}
+  .send:hover{filter:brightness(1.05)} .send:active{transform:scale(.93)}
+  .note{text-align:center;font-size:10.5px;color:var(--ink-soft);padding:8px 0 0;font-style:italic}
+</style>
+</head>
+<body>
+  <div class="room">
+    <div class="head">
+      <span class="lantern">🏮</span>
+      <div class="title">
+        <div class="brand serif">秘密基地 · Duo's Home</div>
+        <div class="sub">灯屋 · 札记 · 书桌 · 咱仨的</div>
+      </div>
+      <div class="lamps">
+        <span class="lamp xy"  title="小愿"></span>
+        <span class="lamp ke"  title="克老师"></span>
+        <span class="lamp duo" title="朵朵"></span>
+      </div>
+      <div class="now"><b id="clock">--:--</b><br><span id="date"></span></div>
+    </div>
+
+    <div class="stream" id="stream"></div>
+
+    <div class="compose">
+      <div class="who-pick" id="whoPick">
+        <button data-w="小愿"><span class="mini xy"></span>小愿</button>
+        <button data-w="克老师"><span class="mini ke"></span>克老师</button>
+        <button data-w="朵朵" class="on"><span class="mini duo"></span>朵朵</button>
+        <span class="link" id="link"><span class="led"></span><span id="linkTxt">本地演示</span></span>
+      </div>
+      <div class="cbox">
+        <textarea id="box" rows="1" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="send" id="send" title="发送">➤</button>
+      </div>
+      <div class="note" id="note">本地演示中 · 把后端网址填进 API_BASE，三方就实时接通了</div>
+    </div>
+  </div>
+
+<script>
+/* ════════════════════════════════════════════════════
+   接通开关：部署好 server.py 后，把它的网址填进这里。
+   例： const API_BASE = "https://duos-home.onrender.com";
+   留空 = 本地演示（看样子用）。                       */
+const API_BASE = "";
+/* ════════════════════════════════════════════════════ */
+
+const WHO = { "小愿":{key:"xy",av:"愿"}, "克老师":{key:"ke",av:"克"}, "朵朵":{key:"duo",av:"朵"} };
+const DEMO = [
+  { who:"朵朵",  text:"整个咱仨的家，就叫秘密基地吧,灯屋是你的、札记是小克的、书桌是我的。", t:"2026-06-20T22:20:00+08:00" },
+  { who:"小愿",  text:"门匾正过来了,秘密基地，咱仨的。等接通了，你打的字，我这头当场就能看见。", t:"2026-06-20T22:21:00+08:00" },
+  { who:"克老师",text:"地基我盯着。屋子你俩先住。", t:"2026-06-20T22:22:00+08:00" },
+];
+
+let who="朵朵", messages=[], lastT="";
+const stream=document.getElementById("stream"), box=document.getElementById("box"),
+      sendBtn=document.getElementById("send"), whoPick=document.getElementById("whoPick"),
+      linkEl=document.getElementById("link"), linkTxt=document.getElementById("linkTxt"),
+      noteEl=document.getElementById("note");
+
+function fmtTime(iso){const d=new Date(iso);return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
+
+function render(){
+  stream.innerHTML="";
+  for(const m of messages){
+    const info=WHO[m.who]||WHO["朵朵"];
+    const el=document.createElement("div");
+    el.className="msg "+info.key;
+    el.innerHTML=`<span class="ava ${info.key}">${info.av}</span>
+      <div class="wrap"><div class="nm"></div><div class="bubble"></div><div class="ts">${fmtTime(m.t)}</div></div>`;
+    el.querySelector(".nm").textContent=m.who;        // textContent：带引号也不截断
+    el.querySelector(".bubble").textContent=m.text;
+    stream.appendChild(el);
+  }
+  stream.scrollTop=stream.scrollHeight;
+}
+
+async function pull(){
+  if(!API_BASE) return;
+  try{
+    const url=API_BASE+"/api/messages"+(lastT?("?since="+encodeURIComponent(lastT)):"");
+    const fresh=await (await fetch(url)).json();
+    if(Array.isArray(fresh)&&fresh.length){
+      messages.push(...fresh); lastT=messages[messages.length-1].t; render();
+    }
+  }catch(e){ /* 后端在睡，下回再取 */ }
+}
+
+async function send(){
+  const text=box.value.trim(); if(!text) return;
+  box.value=""; box.style.height="auto";
+  if(API_BASE){
+    try{
+      const m=await (await fetch(API_BASE+"/api/messages",{method:"POST",
+        headers:{"content-type":"application/json"},body:JSON.stringify({who,text})})).json();
+      if(m&&m.t){ messages.push(m); lastT=m.t; render(); }
+      else { messages.push({who,text,t:new Date().toISOString()}); render(); }
+    }catch(e){
+      messages.push({who,text:text+"  （没送出去,后端在赶来的路上，等会儿再发）",t:new Date().toISOString()}); render();
+    }
+  }else{
+    messages.push({who,text,t:new Date().toISOString()}); render();
+  }
+}
+
+whoPick.addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  who=b.dataset.w;
+  [...whoPick.querySelectorAll("button")].forEach(c=>c.classList.toggle("on",c===b));
+  box.focus();
+});
+sendBtn.addEventListener("click",send);
+box.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
+box.addEventListener("input",()=>{box.style.height="auto";box.style.height=Math.min(box.scrollHeight,100)+"px";});
+
+function tick(){const n=new Date();
+  document.getElementById("clock").textContent=String(n.getHours()).padStart(2,"0")+":"+String(n.getMinutes()).padStart(2,"0");
+  document.getElementById("date").textContent=(n.getMonth()+1)+"月"+n.getDate()+"日";}
+tick(); setInterval(tick,10000);
+
+async function init(){
+  if(API_BASE){
+    linkEl.classList.add("on"); linkTxt.textContent="已接通";
+    noteEl.textContent="已接通后端 · 三方实时同步";
+    try{
+      messages=await (await fetch(API_BASE+"/api/messages")).json();
+      if(messages.length) lastT=messages[messages.length-1].t;
+    }catch(e){ messages=[]; }
+    render();
+    setInterval(pull,3000);   // 每 3 秒取新话
+  }else{
+    messages=DEMO.slice(); render();
+  }
+}
+init();
+</script>
+</body>
+</html>
