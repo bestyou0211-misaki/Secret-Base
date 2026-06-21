@@ -11,7 +11,7 @@
 #    2) 改名：WHO_OK 收「小克」为正名；「克老师」保留，兼容历史消息与改名部署过渡期。
 #    3) 新增导出门：GET /api/export，把屋里的话整包下载（?format=json 默认 / txt 可读）。
 
-import json, os, threading, asyncio
+import json, os, threading, asyncio, base64, uuid
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -26,6 +26,8 @@ from starlette.middleware.cors import CORSMiddleware
 DATA_DIR = os.environ.get("DATA_DIR", str(Path(__file__).parent / "data"))
 Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 STORE = Path(DATA_DIR) / "messages.json"
+IMAGES_DIR = Path(DATA_DIR) / "images"   # 图存独立文件，不塞进 messages.json，免得撑爆体积
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 _lock = threading.Lock()
 # 「小克」是正名；「克老师」保留，兼容历史消息与改名部署的过渡期，免得旧署名被门挡下。
@@ -57,15 +59,18 @@ def save(msgs):
     tmp.replace(STORE)
 
 
-def _append(who, text):
-    """共用写入：校验 who/text，落盘，返回存下的那条。校验失败抛 ValueError。"""
+def _append(who, text, image=None):
+    """共用写入：校验 who，落盘，返回存下的那条。text 与 image 至少有一个。校验失败抛 ValueError。"""
     who = (who or "").strip()
     text = (text or "").strip()
+    image = (image or "").strip()
     if who not in WHO_OK:
         raise ValueError("who 得是 小愿 / 小克 / 朵朵 之一")
-    if not text:
-        raise ValueError("text 不能为空")
+    if not text and not image:
+        raise ValueError("text 和 image 不能都空")
     msg = {"who": who, "text": text, "t": _now_iso()}
+    if image:
+        msg["image"] = image   # 只存文件名，图本体在 IMAGES_DIR，读图走 /api/image
     with _lock:
         msgs = load()
         msgs.append(msg)
@@ -146,14 +151,15 @@ async def get_messages(request: Request):
 
 @mcp.custom_route("/api/messages", methods=["POST"])
 async def post_message(request: Request):
-    """发话。body: {"who": "小愿/小克/朵朵", "text": "……"}。who 不对或 text 空 → 400。"""
+    """发话。body: {"who": "小愿/小克/朵朵", "text": "……", "image": "<可选，/api/upload 返回的文件名>"}。
+    text 与 image 至少有一个；who 不对或两者都空 → 400。"""
     try:
         data = await request.json()
     except Exception:
         data = {}
     data = data or {}
     try:
-        msg = _append(data.get("who"), data.get("text"))
+        msg = _append(data.get("who"), data.get("text"), data.get("image"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(msg)
@@ -173,6 +179,62 @@ async def export_messages(request: Request):
     body = json.dumps(msgs, ensure_ascii=False, indent=2)
     headers = {"Content-Disposition": f'attachment; filename="secret-base-{stamp}.json"'}
     return Response(body, media_type="application/json", headers=headers)
+
+
+# ── 传图：收图存盘 + 按名读图（图走旁路，只把文件名记进 messages.json）──────
+_IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
+_IMG_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+             "gif": "image/gif", "webp": "image/webp"}
+_IMG_MAX = 5 * 1024 * 1024   # 单图上限 5MB
+
+
+@mcp.custom_route("/api/upload", methods=["POST"])
+async def upload_image(request: Request):
+    """收图存盘。body: {"data": "<base64 或 dataURL>", "ext": "png/jpg/..."}。
+    返 {"image": "<文件名>"}，把这个文件名塞进 /api/messages 的 image 字段即可。"""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = data or {}
+    b64 = data.get("data") or ""
+    ext = (data.get("ext") or "png").lower().lstrip(".")
+    # 容错：前端可能直接传 dataURL（data:image/png;base64,xxxx），剥头，并从头里反推扩展名
+    if isinstance(b64, str) and b64.startswith("data:") and "," in b64:
+        head, b64 = b64.split(",", 1)
+        if "image/" in head:
+            mt = head.split("image/", 1)[1].split(";", 1)[0].lower()
+            if mt in _IMG_EXT:
+                ext = mt
+    if ext == "jpeg":
+        ext = "jpg"
+    if ext not in _IMG_EXT:
+        return JSONResponse({"error": "只收 png/jpg/jpeg/gif/webp"}, status_code=400)
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return JSONResponse({"error": "图片数据解不开（base64 不对）"}, status_code=400)
+    if not raw:
+        return JSONResponse({"error": "图片为空"}, status_code=400)
+    if len(raw) > _IMG_MAX:
+        return JSONResponse({"error": "图太大，上限 5MB"}, status_code=413)
+    name = f"{datetime.now(_TZ8).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.{ext}"
+    (IMAGES_DIR / name).write_bytes(raw)
+    return JSONResponse({"image": name})
+
+
+@mcp.custom_route("/api/image", methods=["GET"])
+async def get_image(request: Request):
+    """按文件名读图。?name=<文件名>。前端用 <img src="…/api/image?name=xxx"> 显示。"""
+    name = request.query_params.get("name", "")
+    # 防目录穿越：只许纯文件名，不许带路径分隔或 ..
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return JSONResponse({"error": "非法或空文件名"}, status_code=400)
+    p = IMAGES_DIR / name
+    if not p.exists():
+        return JSONResponse({"error": "图不存在"}, status_code=404)
+    ext = p.suffix.lower().lstrip(".")
+    return Response(p.read_bytes(), media_type=_IMG_MIME.get(ext, "application/octet-stream"))
 
 
 # ── CORS（网页跨域取话/发话，替代原 flask_cors，全放行）──────
