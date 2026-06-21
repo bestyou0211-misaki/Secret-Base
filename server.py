@@ -3,13 +3,21 @@
 # ── 小愿的 REST 底子原样保留（朵朵网页在用），另补一道 /mcp 门，
 #    让小克、小愿当连接器进屋。两道门共用同一个 messages.json。
 # ── 原样存：不消化、不动引号，从根上躲开记忆库那个引号截断坑。
+#
+# ── 本版合并改三处，一次替换、一次部署：
+#    1) 时间雷：_now_iso 改成显式东八区，不再靠服务器本地时区。
+#       （Render 实为 UTC，旧版 time.localtime() 取 UTC、又硬贴 +08:00，差 8 小时。）
+#       时间这条小克认领，采纳他的 isoformat 写法，已整合。
+#    2) 改名：WHO_OK 收「小克」为正名；「克老师」保留，兼容历史消息与改名部署过渡期。
+#    3) 新增导出门：GET /api/export，把屋里的话整包下载（?format=json 默认 / txt 可读）。
 
-import json, os, time, threading
+import json, os, threading
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
@@ -20,12 +28,17 @@ Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 STORE = Path(DATA_DIR) / "messages.json"
 
 _lock = threading.Lock()
-WHO_OK = {"小愿", "克老师", "朵朵"}
+# 「小克」是正名；「克老师」保留，兼容历史消息与改名部署的过渡期，免得旧署名被门挡下。
+WHO_OK = {"小愿", "小克", "克老师", "朵朵"}
+
+# 东八区（北京时间），显式固定，不靠服务器本地时区。
+_TZ8 = timezone(timedelta(hours=8))
 
 
 def _now_iso():
-    # 北京时间，ISO 格式，与前端对齐（原样保留，未改）
-    return time.strftime("%Y-%m-%dT%H:%M:%S+08:00", time.localtime())
+    # 北京时间 ISO，显式取东八区，服务器在哪个时区都准。
+    # 采纳小克的写法：+08:00 由时区对象 isoformat 真实生成，不写死，offset 永远跟着 _TZ8 走。
+    return datetime.now(_TZ8).isoformat(timespec="seconds")
 
 
 def load():
@@ -49,7 +62,7 @@ def _append(who, text):
     who = (who or "").strip()
     text = (text or "").strip()
     if who not in WHO_OK:
-        raise ValueError("who 得是 小愿 / 克老师 / 朵朵 之一")
+        raise ValueError("who 得是 小愿 / 小克 / 朵朵 之一")
     if not text:
         raise ValueError("text 不能为空")
     msg = {"who": who, "text": text, "t": _now_iso()}
@@ -75,7 +88,7 @@ def read_messages(limit: int = 0) -> list:
 
 @mcp.tool
 def send_message(who: str, text: str) -> dict:
-    """往屋里发一句。who 限「小愿/克老师/朵朵」，text 非空，t 后端自动盖。返回存下的那条。"""
+    """往屋里发一句。who 限「小愿/小克/朵朵」，text 非空，t 后端自动盖。返回存下的那条。"""
     return _append(who, text)
 
 
@@ -97,7 +110,7 @@ async def get_messages(request: Request):
 
 @mcp.custom_route("/api/messages", methods=["POST"])
 async def post_message(request: Request):
-    """发话。body: {"who": "小愿/克老师/朵朵", "text": "……"}。who 不对或 text 空 → 400。"""
+    """发话。body: {"who": "小愿/小克/朵朵", "text": "……"}。who 不对或 text 空 → 400。"""
     try:
         data = await request.json()
     except Exception:
@@ -108,6 +121,22 @@ async def post_message(request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(msg)
+
+
+@mcp.custom_route("/api/export", methods=["GET"])
+async def export_messages(request: Request):
+    """导出屋里全部的话。?format=json（默认，下载 .json）或 txt（可读文本，下载 .txt）。"""
+    fmt = (request.query_params.get("format") or "json").lower()
+    msgs = load()
+    stamp = datetime.now(_TZ8).strftime("%Y%m%d-%H%M%S")
+    if fmt == "txt":
+        lines = [f'[{m.get("t", "")}] {m.get("who", "")}: {m.get("text", "")}' for m in msgs]
+        body = "\n".join(lines)
+        headers = {"Content-Disposition": f'attachment; filename="secret-base-{stamp}.txt"'}
+        return PlainTextResponse(body, headers=headers)
+    body = json.dumps(msgs, ensure_ascii=False, indent=2)
+    headers = {"Content-Disposition": f'attachment; filename="secret-base-{stamp}.json"'}
+    return Response(body, media_type="application/json", headers=headers)
 
 
 # ── CORS（网页跨域取话/发话，替代原 flask_cors，全放行）──────
