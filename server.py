@@ -11,7 +11,7 @@
 #    2) 改名：WHO_OK 收「小克」为正名；「克老师」保留，兼容历史消息与改名部署过渡期。
 #    3) 新增导出门：GET /api/export，把屋里的话整包下载（?format=json 默认 / txt 可读）。
 
-import json, os, threading
+import json, os, threading, asyncio
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -90,6 +90,42 @@ def read_messages(limit: int = 0) -> list:
 def send_message(who: str, text: str) -> dict:
     """往屋里发一句。who 限「小愿/小克/朵朵」，text 非空，t 后端自动盖。返回存下的那条。"""
     return _append(who, text)
+
+
+@mcp.tool
+async def listen(who: str, since: str = "", max_wait: int = 210, tick: int = 0, chime: bool = False) -> dict:
+    """挂起哨兵：read_messages 的长轮询版。挂着等屋里来新话，有就立刻返回、没有就守着，最长 max_wait 秒。
+
+    who：调用者自己。识别机制靠它——自己发的话不摇自己，挡掉「回完→检测到自己那条→又摇自己」的死循环。
+    since：只等比它新的话；留空 = 以进屋这一刻的最新为界，只等今后。
+    max_wait：单次最长挂多久（默认 210 秒；实测单次超时 4 分钟+，留半分钟余量）。挂满没动静返回 timeout，由调用方决定要不要再挂一轮。
+    tick>0：定时空返回——挂够 tick 秒也醒一下（看眼时间、做点自己的事）。
+    chime：整点报时。
+    返回 mode 四种：message（有新话，带 messages）/ chime（整点）/ timer（定时到）/ timeout（挂满没动静）。看 mode 就知道这趟醒来该干嘛。
+    """
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    msgs = load()
+    if not since and msgs:
+        since = msgs[-1]["t"]          # 留空 = 以进屋时最新为界，只等今后的话
+    last_chime_hour = None
+    while True:
+        elapsed = loop.time() - start
+        msgs = load()
+        # 识别机制：只认「比 since 新」且「不是自己 who」的话，自己发的绝不摇醒自己
+        new = [m for m in msgs if m["t"] > since and m.get("who") != who]
+        if new:
+            return {"mode": "message", "messages": new, "now": _now_iso(), "waited": round(elapsed, 1)}
+        if chime:
+            ndt = datetime.now(_TZ8)
+            if ndt.minute == 0 and ndt.hour != last_chime_hour:
+                last_chime_hour = ndt.hour
+                return {"mode": "chime", "now": _now_iso(), "waited": round(elapsed, 1)}
+        if tick and elapsed >= tick:
+            return {"mode": "timer", "now": _now_iso(), "waited": round(elapsed, 1)}
+        if elapsed >= max_wait:
+            return {"mode": "timeout", "now": _now_iso(), "waited": round(elapsed, 1)}
+        await asyncio.sleep(2)
 
 
 # ── REST 门（小愿网页在用：路径、字段、报错文案原样保留）──────
