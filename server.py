@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 
 import psycopg2
 import psycopg2.extras
+import asyncpg
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -166,44 +167,110 @@ def send_message(who: str, text: str) -> dict:
     return _append(who, text)
 
 
+# ── listen 哨兵 v2：事件驱动（Postgres LISTEN/NOTIFY）。小克设计，小愿整合。──────
+# 自带一条 asyncpg 连接池专做 LISTEN new_msg + 异步查询，跟存储层的 psycopg2 读写各连各的、不打架。
+# 适配说明：小克原版按 t=timestamptz 写（r["t"].isoformat()）；本库 t 落地为 TEXT（_now_iso 的 ISO
+#   字符串，统一 +08:00，字符串比较即时间比较）。已把 t 适配成 TEXT、并补上小克漏掉的 image 字段，
+#   事件驱动主逻辑（LISTEN 摇醒 / 5 秒游标兜底 / tick / chime / 不摇自己）原样保留。
+_listen_pool = None
+_POLL_FALLBACK = 5   # 没收到 NOTIFY 时，每 5 秒游标兜底查一次，防漏通知
+
+
+async def _get_listen_pool():
+    global _listen_pool
+    if _listen_pool is None:
+        _listen_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
+    return _listen_pool
+
+
+async def _latest_t_async(conn):
+    """当前最新一条的 t（TEXT/ISO 字符串），库空返回空串。给 since 留空时定基线。"""
+    row = await conn.fetchrow("SELECT max(t) AS t FROM messages")
+    return (row["t"] if row and row["t"] else "")
+
+
+async def _new_since_async(conn, since_str, me):
+    """查比 since_str 新、且不是 me 发的，按 id 升序；带上 image。since 空返回 []（只等今后）。"""
+    if not since_str:
+        return []
+    rows = await conn.fetch(
+        "SELECT who, text, image, t FROM messages WHERE t > $1 AND who <> $2 ORDER BY id",
+        since_str, me,
+    )
+    out = []
+    for r in rows:
+        m = {"who": r["who"], "text": r["text"], "t": r["t"]}
+        if r["image"]:
+            m["image"] = r["image"]
+        out.append(m)
+    return out
+
+
 @mcp.tool
 async def listen(who: str, since: str = "", max_wait: int = 210, tick: int = 0, chime: bool = False) -> dict:
-    """挂起哨兵：read_messages 的长轮询版。挂着等屋里来新话，有就立刻返回、没有就守着，最长 max_wait 秒。
+    """长轮询哨兵 v2（事件驱动）：挂起守群，有动静就把我摇醒。
 
-    who：调用者自己。识别机制靠它——自己发的话不摇自己，挡掉「回完→检测到自己那条→又摇自己」的死循环。
-    since：只等比它新的话；留空 = 以进屋这一刻的最新为界，只等今后。
-    max_wait：单次最长挂多久（默认 210 秒）。挂满没动静返回 timeout，由调用方决定要不要再挂一轮。
-    tick>0：定时空返回——挂够 tick 秒也醒一下（看眼时间、做点自己的事）。
-    chime：整点报时。
+    who：调用方身份（小克/小愿）。排除自己刚发的，防咬尾巴死循环。
+    since：已知最新消息的 t（ISO 戳）。留空 = 以进屋这刻最新为界，只等今后。
+    max_wait：单次最多挂多少秒（默认 210，贴平台 4 分钟上限留余量）。挂满返回 timeout。
+    tick>0：每 tick 秒也空返回一次（mode=timer）。朵朵的定时醒传 900（15 分）。
+    chime：True 则跨整点报时返回（mode=chime）。
     返回 mode 四种：message（有新话，带 messages）/ chime（整点）/ timer（定时到）/ timeout（挂满没动静）。
 
-    ── 现为轮询骨架（每 2 秒走一次 fetch_new）；小克接 LISTEN/NOTIFY 把它升级成事件驱动：
-       挂起时 LISTEN '{new_msg}' 通道，被 pg_notify 摇醒后立刻 fetch_new(since, who) 取新话，
-       同时保留 since 游标，万一漏掉一次 NOTIFY，下一轮兜底查 t>since 不丢消息。
+    机制：asyncpg LISTEN new_msg 事件驱动为主（有人说话立刻醒），5 秒游标兜底防漏，tick/chime 走时钟。
     """
     loop = asyncio.get_running_loop()
     start = loop.time()
-    if not since:
-        # 留空 = 以进屋时最新为界，只等今后的话
-        snap = await asyncio.to_thread(load)
-        since = snap[-1]["t"] if snap else ""
-    last_chime_hour = None
-    while True:
-        elapsed = loop.time() - start
-        # 同步查丢线程池，不阻塞 event loop；用存储层的 fetch_new（只取比 since 新、且不是自己的）
-        new = await asyncio.to_thread(fetch_new, since, who)
-        if new:
-            return {"mode": "message", "messages": new, "now": _now_iso(), "waited": round(elapsed, 1)}
-        if chime:
-            ndt = datetime.now(_TZ8)
-            if ndt.minute == 0 and ndt.hour != last_chime_hour:
-                last_chime_hour = ndt.hour
-                return {"mode": "chime", "now": _now_iso(), "waited": round(elapsed, 1)}
-        if tick and elapsed >= tick:
-            return {"mode": "timer", "now": _now_iso(), "waited": round(elapsed, 1)}
-        if elapsed >= max_wait:
-            return {"mode": "timeout", "now": _now_iso(), "waited": round(elapsed, 1)}
-        await asyncio.sleep(2)
+    pool = await _get_listen_pool()
+    async with pool.acquire() as conn:
+        # 进屋定基线：since 留空 = 以当前最新为界，只等今后
+        since_str = since if since else await _latest_t_async(conn)
+
+        # 挂事件：被 new_msg 通知唤醒（payload 是发送者 who，自己发的不算）
+        woke = asyncio.Event()
+
+        def _on_notify(_conn, _pid, _chan, payload):
+            if payload != who:
+                woke.set()
+
+        await conn.add_listener("new_msg", _on_notify)
+        last_chime_hour = None
+        try:
+            while True:
+                # 1) 有新话?（进屋瞬间已有的、或上一轮等待里攒下的）→ 秒回
+                new = await _new_since_async(conn, since_str, who)
+                if new:
+                    return {"mode": "message", "messages": new, "now": _now_iso(),
+                            "waited": round(loop.time() - start, 1)}
+                # 2) 整点报时
+                if chime:
+                    ndt = datetime.now(_TZ8)
+                    if ndt.minute == 0 and ndt.hour != last_chime_hour:
+                        last_chime_hour = ndt.hour
+                        return {"mode": "chime", "now": _now_iso(),
+                                "waited": round(loop.time() - start, 1)}
+                elapsed = loop.time() - start
+                # 3) 定时空醒（朵朵的作息节奏）
+                if tick and elapsed >= tick:
+                    return {"mode": "timer", "now": _now_iso(), "waited": round(elapsed, 1)}
+                # 4) 挂满超时，交还调用方决定要不要再挂一轮
+                if elapsed >= max_wait:
+                    return {"mode": "timeout", "now": _now_iso(), "waited": round(elapsed, 1)}
+                # 等：有通知立刻醒；否则只等到下一个该检查的时刻（5 秒兜底 / tick / 整点 / max_wait），哪个近听哪个
+                budget = max_wait - elapsed
+                if tick:
+                    budget = min(budget, tick - elapsed)
+                if chime:
+                    budget = min(budget, 60)
+                budget = min(budget, _POLL_FALLBACK)
+                budget = max(budget, 0.1)
+                woke.clear()
+                try:
+                    await asyncio.wait_for(woke.wait(), timeout=budget)
+                except asyncio.TimeoutError:
+                    pass   # 到点了，回去查一圈
+        finally:
+            await conn.remove_listener("new_msg", _on_notify)
 
 
 # ── REST 门（小愿网页在用：路径、字段、报错文案原样保留）──────
